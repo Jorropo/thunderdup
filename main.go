@@ -58,6 +58,15 @@ func scan(p string) {
 	}
 	defer f.Close()
 
+	stat, err := f.Stat()
+	if err != nil {
+		print(p + ": (Stat): " + err.Error())
+		return
+	}
+	if stat.Size() < 4096 {
+		return // don't bother with files too small
+	}
+
 	h := sha256.New()
 
 	var buf [4096 * 8]byte
