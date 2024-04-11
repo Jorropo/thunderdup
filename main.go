@@ -22,8 +22,12 @@ func print(s string) {
 var wg sync.WaitGroup
 var mlk sync.Mutex
 var m = make(map[[sha256.Size]byte]string)
+var backoff = make(chan struct{}, 1024*16)
 
 func traverse(p string) {
+	defer wg.Done()
+	defer func() { <-backoff }()
+
 	fs, err := os.ReadDir(p)
 	if err != nil {
 		print(p + ": (ReadDir): " + err.Error())
@@ -31,26 +35,21 @@ func traverse(p string) {
 		return
 	}
 
-	var count int
 	for _, f := range fs {
+		backoff <- struct{}{}
 		if t := f.Type(); t.IsRegular() {
-			count++
+			wg.Add(1)
 			go scan(filepath.Join(p, f.Name()))
 		} else if t.IsDir() {
-			count++
+			wg.Add(1)
 			go traverse(filepath.Join(p, f.Name()))
 		}
 	}
-	if count == 0 {
-		wg.Done()
-		return
-	}
-	count-- // passthrough our own waitgroup count
-	wg.Add(count)
 }
 
 func scan(p string) {
 	defer wg.Done()
+	defer func() { <-backoff }()
 
 	f, err := os.Open(p)
 	if err != nil {
@@ -135,6 +134,7 @@ loop:
 
 func main() {
 	wg.Add(1)
+	backoff <- struct{}{}
 	go traverse(".")
 	wg.Wait()
 }
