@@ -18,37 +18,107 @@ func print(s string) {
 	os.Stderr.WriteString("\n")
 }
 
-var wg sync.WaitGroup
 var mlk sync.Mutex
 var m = make(map[[sha256.Size]byte]string)
-var backoff = make(chan struct{}, 1024*8)
 
-func traverse(p string) {
-	defer wg.Done()
-	defer func() { <-backoff }()
+type kind uint8
 
-	fs, err := os.ReadDir(p)
-	if err != nil {
-		print(p + ": (ReadDir): " + err.Error())
-		wg.Done()
-		return
+const (
+	_ kind = iota
+	traversal
+	scanning
+)
+
+type task struct {
+	path string
+	kind kind
+}
+
+var wg sync.WaitGroup
+var queueLock sync.Mutex
+var queueCond = sync.Cond{L: &queueLock}
+var queue []task // FIXME: should be a resizable ring buffer
+var currentlyWorkingWorkers uint
+
+// decrementCurrentlyWorkingWorkers must be called while holding [queueLock].
+func decrementCurrentlyWorkingWorkers() {
+	currentlyWorkingWorkers--
+	if currentlyWorkingWorkers == 0 && len(queue) == 0 {
+		queueCond.Broadcast() // it's finished, tell everyone
 	}
+}
 
-	for _, f := range fs {
-		backoff <- struct{}{}
-		if t := f.Type(); t.IsRegular() {
-			wg.Add(1)
-			go scan(filepath.Join(p, f.Name()))
-		} else if t.IsDir() {
-			wg.Add(1)
-			go traverse(filepath.Join(p, f.Name()))
+const concurrency = 1024 * 8
+
+func grabNextWorkItem() (_ task, ok bool) {
+	queueLock.Lock()
+	defer queueLock.Unlock()
+	for len(queue) == 0 {
+		if currentlyWorkingWorkers == 0 {
+			return task{}, false // no more work
+		}
+		queueCond.Wait()
+	}
+	t := queue[0]
+	queue = queue[1:]
+	if len(queue) != 0 {
+		queueCond.Signal() // there is more work
+	}
+	currentlyWorkingWorkers++
+	return t, true
+}
+
+func worker() {
+	defer wg.Done()
+
+	for {
+		work, ok := grabNextWorkItem()
+		if !ok {
+			return
+		}
+		switch work.kind {
+		case traversal:
+			traverse(work.path)
+		case scanning:
+			scan(work.path)
+		default:
+			panic("unknown work kind sent")
 		}
 	}
 }
 
+func traverse(p string) {
+	fs, err := os.ReadDir(p)
+	if err != nil {
+		print(p + ": (ReadDir): " + err.Error())
+		queueLock.Lock()
+		defer queueLock.Unlock()
+		decrementCurrentlyWorkingWorkers()
+		return
+	}
+
+	queueLock.Lock()
+	defer queueLock.Unlock()
+	for _, f := range fs {
+		if t := f.Type(); t.IsRegular() {
+			queue = append(queue, task{kind: scanning, path: filepath.Join(p, f.Name())})
+		} else if t.IsDir() {
+			queue = append(queue, task{kind: traversal, path: filepath.Join(p, f.Name())})
+		}
+	}
+
+	decrementCurrentlyWorkingWorkers()
+	if len(queue) != 0 {
+		queueCond.Signal()
+	}
+}
+
 func scan(p string) {
-	defer wg.Done()
-	defer func() { <-backoff }()
+	defer func() {
+		queueLock.Lock()
+		defer queueLock.Unlock()
+		decrementCurrentlyWorkingWorkers()
+	}()
 
 	f, err := os.Open(p)
 	if err != nil {
@@ -128,8 +198,10 @@ func scan(p string) {
 }
 
 func main() {
-	wg.Add(1)
-	backoff <- struct{}{}
-	go traverse(".")
+	queue = []task{{kind: traversal, path: "."}}
+	wg.Add(concurrency)
+	for range concurrency {
+		go worker()
+	}
 	wg.Wait()
 }
