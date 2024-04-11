@@ -175,11 +175,11 @@ func scan(p string) {
 	}
 
 	var errr, errrr error
-	err = fsc.Control(func(sfd uintptr) {
+	err = fsc.Control(func(ffd uintptr) {
 		errr = tsc.Control(func(tfd uintptr) {
-			errrr = unix.IoctlFileDedupeRange(int(sfd), &unix.FileDedupeRange{
+			errrr = unix.IoctlFileDedupeRange(int(tfd), &unix.FileDedupeRange{
 				Src_length: length,
-				Info:       []unix.FileDedupeRangeInfo{{Dest_fd: int64(tfd)}},
+				Info:       []unix.FileDedupeRangeInfo{{Dest_fd: int64(ffd)}},
 			})
 		})
 	})
