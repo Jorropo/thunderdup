@@ -22,7 +22,7 @@ func print(s string) {
 var wg sync.WaitGroup
 var mlk sync.Mutex
 var m = make(map[[sha256.Size]byte]string)
-var backoff = make(chan struct{}, 1024*16)
+var backoff = make(chan struct{}, 1024*8)
 
 func traverse(p string) {
 	defer wg.Done()
