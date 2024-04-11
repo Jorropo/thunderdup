@@ -2,7 +2,6 @@ package main
 
 import (
 	"crypto/sha256"
-	"io"
 	"os"
 	"path/filepath"
 	"sync"
@@ -63,30 +62,17 @@ func scan(p string) {
 		print(p + ": (Stat): " + err.Error())
 		return
 	}
-	if stat.Size() < 4096 {
+	length := uint64(stat.Size())
+	if length < 4096 {
 		return // don't bother with files too small
 	}
 
 	h := sha256.New()
-
-	var buf [4096 * 8]byte
-	var totlength uint64
-loop:
-	for {
-		n, err := f.Read(buf[:])
-		switch err {
-		case nil:
-		case io.EOF:
-			break loop
-		default:
-			print(p + ": (Read): " + err.Error())
-			return
-		}
-
-		totlength += uint64(n)
-		h.Write(buf[:n])
+	_, err = f.WriteTo(h)
+	if err != nil {
+		print(p + ": (WriteTo): " + err.Error())
+		return
 	}
-
 	sum := [sha256.Size]byte(h.Sum(nil))
 
 	mlk.Lock()
@@ -122,7 +108,7 @@ loop:
 	err = fsc.Control(func(sfd uintptr) {
 		errr = tsc.Control(func(tfd uintptr) {
 			errrr = unix.IoctlFileDedupeRange(int(sfd), &unix.FileDedupeRange{
-				Src_length: totlength,
+				Src_length: length,
 				Info:       []unix.FileDedupeRangeInfo{{Dest_fd: int64(tfd)}},
 			})
 		})
