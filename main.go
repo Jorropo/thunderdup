@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 
 	"golang.org/x/sys/unix"
@@ -47,8 +48,6 @@ func decrementCurrentlyWorkingWorkers() {
 		queueCond.Broadcast() // it's finished, tell everyone
 	}
 }
-
-const concurrency = 1024 * 8
 
 func grabNextWorkItem() (_ task, ok bool) {
 	queueLock.Lock()
@@ -199,6 +198,8 @@ func scan(p string) {
 
 func main() {
 	queue = []task{{kind: traversal, path: "."}}
+
+	concurrency := runtime.GOMAXPROCS(0) * 16
 	wg.Add(concurrency)
 	for range concurrency {
 		go worker()
