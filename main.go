@@ -326,7 +326,7 @@ func dedup(backoff chan struct{}, length uint64, paths ...string) {
 }
 
 func main() {
-	concurrencyFactor := flag.Int("cf", 16, "define the concurrency factor, this allows to set the amount of workers run per linux core, use GOMAXPROCS env to configure the number of cores used.")
+	concurrencyFactor := flag.Int("cf", 4, "define the concurrency factor, this allows to set the amount of workers run per linux core, use GOMAXPROCS env to configure the number of cores used.")
 	cpuprofile := flag.String("cpuprofile", "", "write cpu profile to `file`")
 	onlyScan := flag.Bool("only-scan", false, "only scan and do not dedup")
 	flag.Parse()
