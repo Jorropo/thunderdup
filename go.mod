@@ -1,4 +1,4 @@
-module github.com/Jorropo/dedup
+module github.com/Jorropo/thunderdup
 
 go 1.22
 
