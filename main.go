@@ -169,6 +169,8 @@ func scan(p string) {
 	m[sum] = append(l, p)
 }
 
+var totalDedupped atomic.Uint64
+
 func dedup(backoff chan struct{}, length uint64, paths ...string) {
 	defer func() { <-backoff }()
 
@@ -257,6 +259,12 @@ func dedup(backoff chan struct{}, length uint64, paths ...string) {
 		print(paths[0] + ": (FileDedupeRange): " + err.Error())
 		return
 	}
+
+	var dedupped uint64
+	for _, v := range valid[1:] {
+		dedupped += v.Bytes_deduped
+	}
+	totalDedupped.Add(dedupped)
 }
 
 func main() {
@@ -324,4 +332,6 @@ func main() {
 	for range concurrency {
 		backoff <- struct{}{}
 	}
+
+	print("total dedupped: " + humanize.IBytes(totalDedupped.Load()))
 }
