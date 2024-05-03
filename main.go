@@ -190,7 +190,7 @@ func dedup(backoff chan struct{}, length uint64, paths ...string) {
 
 	dedups := make([]unix.FileDedupeRangeInfo, len(paths))
 	for i, p := range paths {
-		// Use a goroutine
+		// Use a goroutine instead of recursion and block the callback in case we have an enormous amount of duplicates.
 		go func() {
 			var good bool
 			defer func() {
