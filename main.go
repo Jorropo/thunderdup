@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -170,6 +171,7 @@ func scan(p string) {
 }
 
 var totalDedupped atomic.Uint64
+var totalDeddupingErrors atomic.Uint64
 
 func dedup(backoff chan struct{}, length uint64, paths ...string) {
 	defer func() { <-backoff }()
@@ -197,6 +199,7 @@ func dedup(backoff chan struct{}, length uint64, paths ...string) {
 				if !good {
 					filesAreReady.Done()
 					hasFailed.Store(true)
+					totalDeddupingErrors.Add(1)
 				}
 				filesHaveAllExited.Done()
 			}()
@@ -257,6 +260,7 @@ func dedup(backoff chan struct{}, length uint64, paths ...string) {
 	})
 	if err != nil {
 		print(paths[0] + ": (FileDedupeRange): " + err.Error())
+		totalDeddupingErrors.Add(uint64(len(valid)))
 		return
 	}
 
@@ -333,5 +337,5 @@ func main() {
 		backoff <- struct{}{}
 	}
 
-	print("total dedupped: " + humanize.IBytes(totalDedupped.Load()))
+	print("total dedupped: " + humanize.IBytes(totalDedupped.Load()) + "\ndedupping errors: " + strconv.FormatUint(totalDeddupingErrors.Load(), 10))
 }
