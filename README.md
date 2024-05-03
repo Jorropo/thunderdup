@@ -47,7 +47,7 @@ Advantages over `bees`:
 - Written in a memory safe language (*hopefully never matter*).
 - Easier to use (just go to the directory and run it).
 - More granular dedup (dedup selected files or directories recursively instead of whole filesystem)
-- File based dedup, does not shard or move extants around on disk,
+- File based dedup, does not shard or move extents around on disk,
   - less fragmentation compared to block based dedup
   - less wear on SSDs.
   - \*shouldn't be undeduped by `btrs fi defrag`.
