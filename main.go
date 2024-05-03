@@ -31,27 +31,16 @@ type key struct {
 	length uint64 // to be recovered by [dedup], the hash would cover this otherwise.
 }
 
+var targetMntId uint64
+
 var mlk sync.Mutex
 var m = make(map[key][]string)
 var totalUniqueFiles, totalDupFiles, totalUniqueBytes, totalDupBytes uint64
 
-type kind uint8
-
-const (
-	_ kind = iota
-	traversal
-	scanning
-)
-
-type task struct {
-	path string
-	kind kind
-}
-
 var wg jsync.FWaitGroup
 var queueLock sync.Mutex
 var queueCond = sync.Cond{L: &queueLock}
-var queue []task // FIXME: should be a resizable ring buffer
+var queue []string // FIXME: should be a resizable ring buffer
 var currentlyWorkingWorkers uint
 
 // decrementCurrentlyWorkingWorkers must be called while holding [queueLock].
@@ -62,12 +51,12 @@ func decrementCurrentlyWorkingWorkers() {
 	}
 }
 
-func grabNextWorkItem() (_ task, ok bool) {
+func grabNextWorkItem() (_ string, ok bool) {
 	queueLock.Lock()
 	defer queueLock.Unlock()
 	for len(queue) == 0 {
 		if currentlyWorkingWorkers == 0 {
-			return task{}, false // no more work
+			return "", false // no more work
 		}
 		queueCond.Wait()
 	}
@@ -84,49 +73,23 @@ func worker() {
 	defer wg.Done()
 
 	for {
-		work, ok := grabNextWorkItem()
+		p, ok := grabNextWorkItem()
 		if !ok {
 			return
 		}
-		switch work.kind {
-		case traversal:
-			traverse(work.path)
-		case scanning:
-			scan(work.path)
-		default:
-			panic("unknown work kind sent")
+		if err := work(p); err != nil {
+			print(p + ": " + err.Error())
 		}
+
 	}
 }
 
-func traverse(p string) {
-	fs, err := os.ReadDir(p)
-	if err != nil {
-		print(p + ": (ReadDir): " + err.Error())
-		queueLock.Lock()
-		defer queueLock.Unlock()
-		decrementCurrentlyWorkingWorkers()
-		return
-	}
-
-	queueLock.Lock()
-	defer queueLock.Unlock()
-	for _, f := range fs {
-		if t := f.Type(); t.IsRegular() {
-			queue = append(queue, task{kind: scanning, path: filepath.Join(p, f.Name())})
-		} else if t.IsDir() {
-			queue = append(queue, task{kind: traversal, path: filepath.Join(p, f.Name())})
-		}
-	}
-
-	decrementCurrentlyWorkingWorkers()
-	if len(queue) != 0 {
-		queueCond.Signal()
-	}
-}
-
-func scan(p string) {
+func work(p string) error {
+	needsDecrement := true
 	defer func() {
+		if !needsDecrement {
+			return
+		}
 		queueLock.Lock()
 		defer queueLock.Unlock()
 		decrementCurrentlyWorkingWorkers()
@@ -134,26 +97,86 @@ func scan(p string) {
 
 	f, err := os.Open(p)
 	if err != nil {
-		print(p + ": (Open): " + err.Error())
-		return
+		return fmt.Errorf("Open: %w", err)
 	}
 	defer f.Close()
 
-	stat, err := f.Stat()
+	isFile, isDir, mntId, fileSize, err := statx(f)
 	if err != nil {
-		print(p + ": (Stat): " + err.Error())
+		return fmt.Errorf("statx: %w", err)
+	}
+	if targetMntId == 0 {
+		targetMntId = mntId // first statx, initialize
+	} else if mntId != targetMntId {
+		return nil
+	}
+
+	if isDir {
+		needsDecrement, err = traverse(f, p)
+		return err
+	}
+	if isFile {
+		return scan(f, p, fileSize)
+	}
+	return nil
+}
+
+func traverse(f *os.File, p string) (needsDecrement bool, err error) {
+	fs, err := f.ReadDir(0)
+	if err != nil {
+		return true, fmt.Errorf("ReadDir: %w", err)
+	}
+
+	queueLock.Lock()
+	defer queueLock.Unlock()
+	queue = slices.Grow(queue, len(fs))
+	for _, f := range fs {
+		queue = append(queue, filepath.Join(p, f.Name()))
+	}
+
+	decrementCurrentlyWorkingWorkers()
+	if len(queue) != 0 {
+		queueCond.Signal()
+	}
+	return false, nil
+}
+
+func statx(f *os.File) (isFile, isDir bool, mntId uint64, fileSize uint64, rerr error) {
+	fsc, err := f.SyscallConn()
+	if err != nil {
+		rerr = fmt.Errorf("SyscallConn: %w", err)
 		return
 	}
-	length := uint64(stat.Size())
+
+	var stat unix.Statx_t
+	var errr error
+	err = fsc.Control(func(fd uintptr) {
+		errr = unix.Statx(int(fd), "", unix.AT_EMPTY_PATH|unix.AT_SYMLINK_NOFOLLOW, unix.STATX_MNT_ID|unix.STATX_TYPE|unix.STATX_SIZE, &stat)
+	})
+	if err != nil {
+		rerr = fmt.Errorf("Control: %w", err)
+		return
+	}
+	if errr != nil {
+		rerr = fmt.Errorf("Statx: %w", errr)
+		return
+	}
+	isFile = stat.Mode&unix.S_IFMT == unix.S_IFREG
+	isDir = stat.Mode&unix.S_IFMT == unix.S_IFDIR
+	mntId = stat.Mnt_id
+	fileSize = stat.Size
+	return
+}
+
+func scan(f *os.File, p string, length uint64) error {
 	if length < 4096 {
-		return // don't bother with files too small
+		return nil // don't bother with files too small
 	}
 
 	h := sha256.New()
-	_, err = f.WriteTo(h)
+	_, err := f.WriteTo(h)
 	if err != nil {
-		print(p + ": (WriteTo): " + err.Error())
-		return
+		return fmt.Errorf("WriteTo: %w", err)
 	}
 	sum := key{[sha256.Size]byte(h.Sum(nil)), length}
 
@@ -168,6 +191,7 @@ func scan(p string) {
 		totalUniqueFiles++
 	}
 	m[sum] = append(l, p)
+	return nil
 }
 
 var totalDedupped atomic.Uint64
@@ -273,7 +297,7 @@ func dedup(backoff chan struct{}, length uint64, paths ...string) {
 
 func main() {
 	// Run in two stages to prevent undeduplicating deduplicated content, first scan everything.
-	queue = []task{{kind: traversal, path: "."}}
+	queue = []string{"."}
 
 	concurrency := runtime.GOMAXPROCS(0) * 16
 	done := make(chan struct{})
