@@ -260,7 +260,7 @@ func dedup(backoff chan struct{}, length uint64, paths ...string) {
 	}
 
 	printLock.Lock()
-	os.Stderr.WriteString("found dups: ")
+	os.Stderr.WriteString("deduplicating: ")
 	os.Stderr.WriteString(paths[0])
 	for _, p := range paths[1:] {
 		os.Stderr.WriteString("\n\t- ")
