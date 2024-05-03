@@ -328,6 +328,7 @@ func dedup(backoff chan struct{}, length uint64, paths ...string) {
 func main() {
 	concurrencyFactor := flag.Int("cf", 16, "define the concurrency factor, this allows to set the amount of workers run per linux core, use GOMAXPROCS env to configure the number of cores used.")
 	cpuprofile := flag.String("cpuprofile", "", "write cpu profile to `file`")
+	onlyScan := flag.Bool("only-scan", false, "only scan and do not dedup")
 	flag.Parse()
 	if *concurrencyFactor <= 0 {
 		print("concurrencyFactor must be > 0")
@@ -392,6 +393,10 @@ func main() {
 		printLock.Unlock()
 	}
 	timer.Stop()
+
+	if *onlyScan {
+		return
+	}
 
 	if totalDupFiles == 0 {
 		print("No duplicate found !")
