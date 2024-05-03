@@ -55,8 +55,11 @@ type key struct {
 var targetMntId atomic.Uint64
 
 var mlk sync.Mutex
-var m = make(map[key][]string)
+var hashes = make(map[key][]string)
 var totalUniqueFiles, totalDupFiles, totalUniqueBytes, totalDupBytes uint64
+
+var llk sync.Mutex
+var lengthes = make(map[uint64]string) // lengthes is used to lazily compute hashes, first bucket on size and only hash if multiple files with the same size are found
 
 var wg jsync.FWaitGroup
 var queueLock sync.Mutex
@@ -203,6 +206,49 @@ func scan(f *os.File, p string, length, blocksize uint64) error {
 		return nil // don't bother with files too small
 	}
 
+	llk.Lock()
+	other, alreadyExists := lengthes[length]
+	if !alreadyExists {
+		lengthes[length] = p // record ourself to be lazily started later
+		llk.Unlock()
+
+		mlk.Lock()
+		defer mlk.Unlock()
+		// Carefull here ! We are reporting stats before we hashed it, we will need to tweak stats later.
+		totalUniqueBytes += length
+		totalUniqueFiles++
+		return nil
+	}
+	if other != "" {
+		lengthes[length] = "" // indicate the other file isn't waiting to be started anymore
+	}
+	llk.Unlock()
+
+	if other != "" {
+		// other file was waiting for lazy hashing, hash it now
+		var wait sync.Mutex
+		wait.Lock()
+		defer wait.Lock() // we don't want to return without this finishing else we have unbouded concurrency
+		go func() {
+			defer wait.Unlock()
+			if err := func() error {
+				f, err := os.Open(other)
+				if err != nil {
+					return fmt.Errorf("Open: %w", err)
+				}
+				defer f.Close()
+
+				return hashFile(f, length, other, true)
+			}(); err != nil {
+				print(other + ": " + err.Error())
+			}
+		}()
+	}
+
+	return hashFile(f, length, p, false)
+}
+
+func hashFile(f *os.File, length uint64, p string, statsWereAlreadyRecorded bool) error {
 	h := xxhash.New()
 	_, err := f.WriteTo(h)
 	if err != nil {
@@ -212,15 +258,24 @@ func scan(f *os.File, p string, length, blocksize uint64) error {
 
 	mlk.Lock()
 	defer mlk.Unlock()
-	l, ok := m[sum]
+	l, ok := hashes[sum]
 	if ok {
+		if statsWereAlreadyRecorded {
+			// we double counted, let's correct that
+			totalUniqueBytes -= length
+			totalUniqueFiles--
+		}
 		totalDupBytes += length
 		totalDupFiles++
 	} else {
-		totalUniqueBytes += length
-		totalUniqueFiles++
+		if statsWereAlreadyRecorded {
+			// we already counted it as we were adding it to the lazy bucket
+		} else {
+			totalUniqueBytes += length
+			totalUniqueFiles++
+		}
 	}
-	m[sum] = append(l, p)
+	hashes[sum] = append(l, p)
 	return nil
 }
 
@@ -407,8 +462,8 @@ func main() {
 	backoff := make(chan struct{}, concurrency)
 
 	// Then dedup duplicates, pass all files in bulk to FileDedupeRange.
-	for k, files := range m {
-		m[k] = nil
+	for k, files := range hashes {
+		hashes[k] = nil
 		if len(files) < 2 {
 			continue
 		}
