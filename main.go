@@ -51,7 +51,7 @@ type key struct {
 	length uint64 // to be recovered by [dedup], the hash would cover this otherwise.
 }
 
-var targetMntId uint64
+var targetMntId atomic.Uint64
 
 var mlk sync.Mutex
 var m = make(map[key][]string)
@@ -128,9 +128,14 @@ func work(p string) error {
 	if err != nil {
 		return fmt.Errorf("statx: %w", err)
 	}
-	if targetMntId == 0 {
-		targetMntId = mntId // first statx, initialize
-	} else if mntId != targetMntId {
+	tgt := targetMntId.Load()
+	if tgt == 0 {
+		if targetMntId.CompareAndSwap(0, mntId) {
+			// first statx, initialize
+		} else if mntId != targetMntId.Load() {
+			return nil
+		}
+	} else if mntId != tgt {
 		return nil
 	}
 
