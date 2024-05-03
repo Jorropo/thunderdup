@@ -106,7 +106,7 @@ func work(p string) error {
 	}
 	defer f.Close()
 
-	isFile, isDir, mntId, fileSize, err := statx(f)
+	isFile, isDir, mntId, fileSize, blocksize, err := statx(f)
 	if err != nil {
 		return fmt.Errorf("statx: %w", err)
 	}
@@ -121,7 +121,7 @@ func work(p string) error {
 		return err
 	}
 	if isFile {
-		return scan(f, p, fileSize)
+		return scan(f, p, fileSize, blocksize)
 	}
 	return nil
 }
@@ -146,7 +146,7 @@ func traverse(f *os.File, p string) (needsDecrement bool, err error) {
 	return false, nil
 }
 
-func statx(f *os.File) (isFile, isDir bool, mntId uint64, fileSize uint64, rerr error) {
+func statx(f *os.File) (isFile, isDir bool, mntId, fileSize, blocksize uint64, rerr error) {
 	fsc, err := f.SyscallConn()
 	if err != nil {
 		rerr = fmt.Errorf("SyscallConn: %w", err)
@@ -170,11 +170,12 @@ func statx(f *os.File) (isFile, isDir bool, mntId uint64, fileSize uint64, rerr 
 	isDir = stat.Mode&unix.S_IFMT == unix.S_IFDIR
 	mntId = stat.Mnt_id
 	fileSize = stat.Size
+	blocksize = uint64(stat.Blksize)
 	return
 }
 
-func scan(f *os.File, p string, length uint64) error {
-	if length < 4096 {
+func scan(f *os.File, p string, length, blocksize uint64) error {
+	if length < blocksize {
 		return nil // don't bother with files too small
 	}
 
