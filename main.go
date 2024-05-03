@@ -2,13 +2,17 @@ package main
 
 import (
 	"crypto/sha256"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
 	"sync"
 	"sync/atomic"
+	"time"
 
+	"github.com/Jorropo/jsync"
+	"github.com/dustin/go-humanize"
 	"golang.org/x/sys/unix"
 )
 
@@ -28,6 +32,7 @@ type key struct {
 
 var mlk sync.Mutex
 var m = make(map[key][]string)
+var totalUniqueFiles, totalDupFiles, totalUniqueBytes, totalDupBytes uint64
 
 type kind uint8
 
@@ -42,7 +47,7 @@ type task struct {
 	kind kind
 }
 
-var wg sync.WaitGroup
+var wg jsync.FWaitGroup
 var queueLock sync.Mutex
 var queueCond = sync.Cond{L: &queueLock}
 var queue []task // FIXME: should be a resizable ring buffer
@@ -153,7 +158,15 @@ func scan(p string) {
 
 	mlk.Lock()
 	defer mlk.Unlock()
-	m[sum] = append(m[sum], p)
+	l, ok := m[sum]
+	if ok {
+		totalDupBytes += length
+		totalDupFiles++
+	} else {
+		totalUniqueBytes += length
+		totalUniqueFiles++
+	}
+	m[sum] = append(l, p)
 }
 
 func dedup(backoff chan struct{}, length uint64, paths ...string) {
@@ -251,11 +264,50 @@ func main() {
 	queue = []task{{kind: traversal, path: "."}}
 
 	concurrency := runtime.GOMAXPROCS(0) * 16
-	wg.Add(concurrency)
+	done := make(chan struct{})
+	wg.Init(func() { close(done) }, uint64(concurrency))
 	for range concurrency {
 		go worker()
 	}
-	wg.Wait()
+
+	print("Scanning ...")
+	timer := time.NewTicker(time.Second)
+	var exit bool
+	for !exit {
+		select {
+		case <-done:
+			exit = true
+		case <-timer.C:
+		}
+
+		mlk.Lock()
+		uniqueFiles := totalUniqueFiles
+		uniqueBytes := totalUniqueBytes
+		dupFiles := totalDupFiles
+		dupBytes := totalDupBytes
+		mlk.Unlock()
+
+		queueLock.Lock()
+		queueLength := len(queue)
+		workingWorkers := currentlyWorkingWorkers
+		queueLock.Unlock()
+
+		printLock.Lock()
+		fmt.Fprintf(os.Stderr, `%v:
+	unique:    %d	%s
+	duplicate: %d	%s
+	queue length: %d
+	currently working workers: %d/%d
+`, time.Now().Format(time.DateTime), uniqueFiles, humanize.IBytes(uniqueBytes), dupFiles, humanize.IBytes(dupBytes), queueLength, workingWorkers, concurrency)
+		printLock.Unlock()
+	}
+	timer.Stop()
+
+	if totalDupFiles == 0 {
+		print("No duplicate found !")
+		return
+	}
+	print("Deduplicating ...")
 
 	backoff := make(chan struct{}, concurrency)
 
