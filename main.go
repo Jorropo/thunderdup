@@ -18,10 +18,10 @@
 package main
 
 import (
-	"crypto/sha256"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -35,6 +35,7 @@ import (
 
 	"github.com/Jorropo/jsync"
 	"github.com/dustin/go-humanize"
+	"github.com/zeebo/blake3"
 	"golang.org/x/sys/unix"
 )
 
@@ -47,8 +48,10 @@ func print(s string) {
 	os.Stderr.WriteString("\n")
 }
 
+const hashSize = 16
+
 type key struct {
-	hash   [sha256.Size]byte
+	hash   [hashSize]byte
 	length uint64 // to be recovered by [dedup], the hash would cover this otherwise.
 }
 
@@ -203,12 +206,17 @@ func scan(f *os.File, p string, length, blocksize uint64) error {
 		return nil // don't bother with files too small
 	}
 
-	h := sha256.New()
+	h := blake3.New()
 	_, err := f.WriteTo(h)
 	if err != nil {
 		return fmt.Errorf("WriteTo: %w", err)
 	}
-	sum := key{[sha256.Size]byte(h.Sum(nil)), length}
+	var digest [hashSize]byte
+	_, err = io.ReadFull(h.Digest(), digest[:])
+	if err != nil {
+		panic(fmt.Errorf("failed to read digest, should never fail: %w", err))
+	}
+	sum := key{digest, length}
 
 	mlk.Lock()
 	defer mlk.Unlock()
