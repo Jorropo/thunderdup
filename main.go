@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/sha256"
 	"errors"
+	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -302,10 +303,22 @@ func dedup(backoff chan struct{}, length uint64, paths ...string) {
 }
 
 func main() {
-	// Run in two stages to prevent undeduplicating deduplicated content, first scan everything.
-	queue = []string{"."}
+	concurrencyFactor := flag.Int("cf", 16, "define the concurrency factor, this allows to set the amount of workers run per linux core, use GOMAXPROCS env to configure the number of cores used.")
+	flag.Parse()
+	if *concurrencyFactor <= 0 {
+		print("concurrencyFactor must be > 0")
+		return
+	}
 
-	concurrency := runtime.GOMAXPROCS(0) * 16
+	// Run in two stages to prevent undeduplicating deduplicated content, first scan everything.
+	queue = flag.Args()
+	if len(queue) == 0 {
+		queue = []string{"."}
+	} else {
+		queue = queue[:len(queue):len(queue)] // make sure it is cloned on the first modification
+	}
+
+	concurrency := runtime.GOMAXPROCS(0) * *concurrencyFactor
 	done := make(chan struct{})
 	wg.Init(func() { close(done) }, uint64(concurrency))
 	for range concurrency {
