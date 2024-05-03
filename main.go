@@ -119,7 +119,7 @@ func work(p string) error {
 		decrementCurrentlyWorkingWorkers()
 	}()
 
-	f, err := os.OpenFile(p, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	f, err := os.OpenFile(p, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		if errors.Is(err, syscall.ELOOP) {
 			return nil // this is O_NOFOLLOW result, we tried to open a symlink, ignore
