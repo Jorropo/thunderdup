@@ -25,6 +25,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"runtime/pprof"
 	"slices"
 	"strconv"
 	"sync"
@@ -326,10 +327,22 @@ func dedup(backoff chan struct{}, length uint64, paths ...string) {
 
 func main() {
 	concurrencyFactor := flag.Int("cf", 16, "define the concurrency factor, this allows to set the amount of workers run per linux core, use GOMAXPROCS env to configure the number of cores used.")
+	cpuprofile := flag.String("cpuprofile", "", "write cpu profile to `file`")
 	flag.Parse()
 	if *concurrencyFactor <= 0 {
 		print("concurrencyFactor must be > 0")
 		return
+	}
+	if *cpuprofile != "" {
+		f, err := os.Create(*cpuprofile)
+		if err != nil {
+			print("could not create CPU profile: " + err.Error())
+		}
+		defer f.Close()
+		if err := pprof.StartCPUProfile(f); err != nil {
+			print("could not start CPU profile: " + err.Error())
+		}
+		defer pprof.StopCPUProfile()
 	}
 
 	// Run in two stages to prevent undeduplicating deduplicated content, first scan everything.
