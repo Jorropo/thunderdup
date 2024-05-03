@@ -85,6 +85,7 @@ func grabNextWorkItem() (_ string, ok bool) {
 		queueCond.Wait()
 	}
 	t := queue[0]
+	queue[0] = "" // early gc
 	queue = queue[1:]
 	if len(queue) != 0 {
 		queueCond.Signal() // there is more work
@@ -463,7 +464,7 @@ func main() {
 
 	// Then dedup duplicates, pass all files in bulk to FileDedupeRange.
 	for k, files := range hashes {
-		hashes[k] = nil
+		hashes[k] = nil // early gc
 		if len(files) < 2 {
 			continue
 		}
