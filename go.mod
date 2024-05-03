@@ -1,6 +1,6 @@
 module github.com/Jorropo/dedup
 
-go 1.23
+go 1.22
 
 require (
 	github.com/Jorropo/jsync v1.0.1
