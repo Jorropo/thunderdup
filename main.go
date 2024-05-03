@@ -227,26 +227,31 @@ func scan(f *os.File, p string, length, blocksize uint64) error {
 
 	if other != "" {
 		// other file was waiting for lazy hashing, hash it now
-		var wait sync.Mutex
-		wait.Lock()
-		defer wait.Lock() // we don't want to return without this finishing else we have unbouded concurrency
-		go func() {
-			defer wait.Unlock()
-			if err := func() error {
-				f, err := os.Open(other)
-				if err != nil {
-					return fmt.Errorf("Open: %w", err)
-				}
-				defer f.Close()
-
-				return hashFile(f, length, other, true)
-			}(); err != nil {
-				print(other + ": " + err.Error())
-			}
-		}()
+		lazyHasherBackoff <- struct{}{}
+		wg.Add()
+		go doLazyHash(other, length)
 	}
 
 	return hashFile(f, length, p, false)
+}
+
+var lazyHasherBackoff chan struct{}
+
+func doLazyHash(other string, length uint64) {
+	defer wg.Done()
+	defer func() { <-lazyHasherBackoff }()
+
+	if err := func() error {
+		f, err := os.Open(other)
+		if err != nil {
+			return fmt.Errorf("Open: %w", err)
+		}
+		defer f.Close()
+
+		return hashFile(f, length, other, true)
+	}(); err != nil {
+		print(other + ": " + err.Error())
+	}
 }
 
 func hashFile(f *os.File, length uint64, p string, statsWereAlreadyRecorded bool) error {
@@ -411,6 +416,7 @@ func main() {
 	}
 
 	concurrency := runtime.GOMAXPROCS(0) * *concurrencyFactor
+	lazyHasherBackoff = make(chan struct{}, concurrency)
 	done := make(chan struct{})
 	wg.Init(func() { close(done) }, uint64(concurrency))
 	for range concurrency {
@@ -439,13 +445,19 @@ func main() {
 		workingWorkers := currentlyWorkingWorkers
 		queueLock.Unlock()
 
+		lazyHashers := len(lazyHasherBackoff)
+		var lazyHashersBonus string
+		if lazyHashers != 0 {
+			lazyHashersBonus = "+" + strconv.Itoa(lazyHashers)
+		}
+
 		printLock.Lock()
 		fmt.Fprintf(os.Stderr, `%v:
 	unique:    %d	%s
 	duplicate: %d	%s
 	queue length: %d
-	currently working workers: %d/%d
-`, time.Now().Format(time.DateTime), uniqueFiles, humanize.IBytes(uniqueBytes), dupFiles, humanize.IBytes(dupBytes), queueLength, workingWorkers, concurrency)
+	currently working workers: %d%s/%d
+`, time.Now().Format(time.DateTime), uniqueFiles, humanize.IBytes(uniqueBytes), dupFiles, humanize.IBytes(dupBytes), queueLength, workingWorkers, lazyHashersBonus, concurrency)
 		printLock.Unlock()
 	}
 	timer.Stop()
