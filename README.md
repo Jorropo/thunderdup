@@ -67,6 +67,8 @@ Disadvantages over `bees`:
 
 `thunderdup` is written in a memory safe language (Go) and open all the files in Read-Only mode, deduplication happens using linux's `FileDedupeRange` syscall which atomically compare file content in the kernel.
 
+This create *reflinks* which are Copy-On-Write that means the files share the on disk storage, however when one of them has modified regions they are written into a new location, this means other files are not affected.
+
 **Assuming there are no bugs in the kernel**, the worst that can happen is dedup not happening where it should have, it can't corrupt or change the content of your files.
 
 It is also possible to have a bug in Go or thunderdup itself, but that less likely.
