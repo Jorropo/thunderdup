@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 	"strconv"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/Jorropo/jsync"
@@ -95,8 +97,11 @@ func work(p string) error {
 		decrementCurrentlyWorkingWorkers()
 	}()
 
-	f, err := os.Open(p)
+	f, err := os.OpenFile(p, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
 	if err != nil {
+		if errors.Is(err, syscall.ELOOP) {
+			return nil // this is O_NOFOLLOW result, we tried to open a symlink, ignore
+		}
 		return fmt.Errorf("Open: %w", err)
 	}
 	defer f.Close()
