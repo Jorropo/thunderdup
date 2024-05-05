@@ -38,6 +38,9 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+const pageSize = 4096 // FIXME: should vary this properly, it's fine to underestimate but not overestimate
+const maxInfos = (pageSize - unix.SizeofRawFileDedupeRange) / unix.SizeofRawFileDedupeRangeInfo
+
 var printLock sync.Mutex
 
 func print(s string) {
@@ -306,6 +309,7 @@ func dedup(backoff chan struct{}, length uint64, paths ...string) {
 	var hasFailed atomic.Bool
 
 	dedups := make([]unix.FileDedupeRangeInfo, len(paths))
+	// FIXME: we don't need that many paths open at once, we could be more economical about fds if we only openned the current batch files.
 	for i, p := range paths {
 		// Use a goroutine instead of recursion and block the callback in case we have an enormous amount of duplicates.
 		go func() {
@@ -369,46 +373,54 @@ func dedup(backoff chan struct{}, length uint64, paths ...string) {
 		return
 	}
 
+	var dedupped uint64
 	source := valid[0].Dest_fd
 	valid = valid[1:]
-	var dedupped, offset uint64
 	for {
-		arg := &unix.FileDedupeRange{
-			Src_length: length,
-			Src_offset: offset,
-			Info:       valid,
-		}
-		err := unix.IoctlFileDedupeRange(int(source), arg)
-		if err != nil {
-			print(paths[0] + ": (FileDedupeRange): " + err.Error())
-			totalDeddupingErrors.Add(uint64(len(valid)))
-			return
+		current := valid[:min(len(valid), maxInfos)]
+		var offset uint64
+		for {
+			arg := &unix.FileDedupeRange{
+				Src_length: length - offset,
+				Src_offset: offset,
+				Info:       current,
+			}
+			err := unix.IoctlFileDedupeRange(int(source), arg)
+			if err != nil {
+				print(paths[0] + ": (FileDedupeRange): " + err.Error())
+				totalDeddupingErrors.Add(uint64(len(current)))
+				return
+			}
+
+			var best uint64
+			nextCurrent := current[:0]
+			for i, v := range current {
+				bytesDedupped := v.Bytes_deduped
+				dedupped += bytesDedupped
+				if bytesDedupped < best {
+					// this file is having issues, forget about it.
+					continue
+				}
+				if best < bytesDedupped {
+					// previous files were doing poorly, forget about them.
+					best = bytesDedupped
+					nextCurrent = current[i:i]
+				}
+				v.Dest_offset += bytesDedupped
+				nextCurrent = append(nextCurrent, v)
+			}
+			current = nextCurrent
+			offset += best
+
+			if offset == length || best == 0 {
+				break
+			}
 		}
 
-		var best uint64
-		nextValid := valid[:0]
-		for i, v := range valid {
-			bytesDedupped := v.Bytes_deduped
-			dedupped += bytesDedupped
-			if bytesDedupped < best {
-				// this file is having issues, forget about it.
-				continue
-			}
-			if best < bytesDedupped {
-				// previous files were doing poorly, forget about them.
-				best = bytesDedupped
-				nextValid = valid[i:i]
-			}
-			v.Dest_offset += bytesDedupped
-			nextValid = append(nextValid, v)
-		}
-		valid = nextValid
-		offset += best
-		length -= best
-
-		if length == 0 || best == 0 {
+		if len(valid) <= maxInfos {
 			break
 		}
+		valid = valid[maxInfos:]
 	}
 	totalDedupped.Add(dedupped)
 }
