@@ -67,6 +67,11 @@ var queueCond = sync.Cond{L: &queueLock}
 var queue []string // FIXME: should be a resizable ring buffer
 var currentlyWorkingWorkers uint
 
+var lazyHasherBackoff chan struct{}
+
+var totalDedupped atomic.Uint64
+var totalDeddupingErrors atomic.Uint64
+
 // decrementCurrentlyWorkingWorkers must be called while holding [queueLock].
 func decrementCurrentlyWorkingWorkers() {
 	currentlyWorkingWorkers--
@@ -235,8 +240,6 @@ func scan(f *os.File, p string, length, blocksize uint64) error {
 	return hashFile(f, length, p, false)
 }
 
-var lazyHasherBackoff chan struct{}
-
 func doLazyHash(other string, length uint64) {
 	defer wg.Done()
 	defer func() { <-lazyHasherBackoff }()
@@ -284,9 +287,6 @@ func hashFile(f *os.File, length uint64, p string, statsWereAlreadyRecorded bool
 	hashes[sum] = append(l, p)
 	return nil
 }
-
-var totalDedupped atomic.Uint64
-var totalDeddupingErrors atomic.Uint64
 
 func dedup(backoff chan struct{}, length uint64, paths ...string) {
 	defer func() { <-backoff }()
