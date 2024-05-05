@@ -357,7 +357,7 @@ func dedup(backoff chan struct{}, length uint64, paths ...string) {
 
 	filesAreReady.Wait()
 
-	valid := dedups[:]
+	valid := dedups[:0]
 	for _, d := range dedups {
 		if d.Dest_fd == 0 {
 			continue
