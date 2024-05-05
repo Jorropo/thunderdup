@@ -377,24 +377,24 @@ func dedup(backoff chan struct{}, length uint64, paths ...string) {
 	source := valid[0].Dest_fd
 	valid = valid[1:]
 	for {
-		current := valid[:min(len(valid), maxInfos)]
+		currentBatch := valid[:min(len(valid), maxInfos)]
 		var offset uint64
 		for {
 			arg := &unix.FileDedupeRange{
 				Src_length: length - offset,
 				Src_offset: offset,
-				Info:       current,
+				Info:       currentBatch,
 			}
 			err := unix.IoctlFileDedupeRange(int(source), arg)
 			if err != nil {
 				print(paths[0] + ": (FileDedupeRange): " + err.Error())
-				totalDeddupingErrors.Add(uint64(len(current)))
+				totalDeddupingErrors.Add(uint64(len(currentBatch)))
 				return
 			}
 
 			var best uint64
-			nextCurrent := current[:0]
-			for i, v := range current {
+			nextBatch := currentBatch[:0]
+			for i, v := range currentBatch {
 				bytesDedupped := v.Bytes_deduped
 				dedupped += bytesDedupped
 				if bytesDedupped < best {
@@ -404,12 +404,12 @@ func dedup(backoff chan struct{}, length uint64, paths ...string) {
 				if best < bytesDedupped {
 					// previous files were doing poorly, forget about them.
 					best = bytesDedupped
-					nextCurrent = current[i:i]
+					nextBatch = currentBatch[i:i]
 				}
 				v.Dest_offset += bytesDedupped
-				nextCurrent = append(nextCurrent, v)
+				nextBatch = append(nextBatch, v)
 			}
-			current = nextCurrent
+			currentBatch = nextBatch
 			offset += best
 
 			if offset == length || best == 0 {
