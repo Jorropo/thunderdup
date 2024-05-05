@@ -369,19 +369,46 @@ func dedup(backoff chan struct{}, length uint64, paths ...string) {
 		return
 	}
 
-	err := unix.IoctlFileDedupeRange(int(valid[0].Dest_fd), &unix.FileDedupeRange{
-		Src_length: length,
-		Info:       valid[1:],
-	})
-	if err != nil {
-		print(paths[0] + ": (FileDedupeRange): " + err.Error())
-		totalDeddupingErrors.Add(uint64(len(valid)))
-		return
-	}
+	source := valid[0].Dest_fd
+	valid = valid[1:]
+	var dedupped, offset uint64
+	for {
+		arg := &unix.FileDedupeRange{
+			Src_length: length,
+			Src_offset: offset,
+			Info:       valid,
+		}
+		err := unix.IoctlFileDedupeRange(int(source), arg)
+		if err != nil {
+			print(paths[0] + ": (FileDedupeRange): " + err.Error())
+			totalDeddupingErrors.Add(uint64(len(valid)))
+			return
+		}
 
-	var dedupped uint64
-	for _, v := range valid[1:] {
-		dedupped += v.Bytes_deduped
+		var best uint64
+		nextValid := valid[:0]
+		for i, v := range valid {
+			bytesDedupped := v.Bytes_deduped
+			dedupped += bytesDedupped
+			if bytesDedupped < best {
+				// this file is having issues, forget about it.
+				continue
+			}
+			if best < bytesDedupped {
+				// previous files were doing poorly, forget about them.
+				best = bytesDedupped
+				nextValid = valid[i:i]
+			}
+			v.Dest_offset += bytesDedupped
+			nextValid = append(nextValid, v)
+		}
+		valid = nextValid
+		offset += best
+		length -= best
+
+		if length == 0 || best == 0 {
+			break
+		}
 	}
 	totalDedupped.Add(dedupped)
 }
