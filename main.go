@@ -33,7 +33,7 @@ import (
 	"time"
 
 	"github.com/Jorropo/jsync"
-	"github.com/cespare/xxhash"
+	"github.com/cespare/xxhash/v2"
 	"github.com/dustin/go-humanize"
 	"golang.org/x/sys/unix"
 )
