@@ -18,6 +18,7 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"flag"
 	"fmt"
@@ -42,12 +43,20 @@ const pageSize = 4096 // FIXME: should vary this properly, it's fine to underest
 const maxInfos = (pageSize - unix.SizeofRawFileDedupeRange) / unix.SizeofRawFileDedupeRangeInfo
 
 var printLock sync.Mutex
+var printBuffer bytes.Buffer
 
 func print(s string) {
+	printW(func(w *bytes.Buffer) {
+		printBuffer.WriteString(s)
+		printBuffer.WriteByte('\n')
+	})
+}
+
+func printW(f func(w *bytes.Buffer)) {
 	printLock.Lock()
 	defer printLock.Unlock()
-	os.Stderr.WriteString(s)
-	os.Stderr.WriteString("\n")
+	f(&printBuffer)
+	printBuffer.WriteTo(os.Stderr)
 }
 
 type key struct {
@@ -349,15 +358,15 @@ func dedup(backoff chan struct{}, length uint64, paths ...string) {
 		}()
 	}
 
-	printLock.Lock()
-	os.Stderr.WriteString("deduplicating: ")
-	os.Stderr.WriteString(paths[0])
-	for _, p := range paths[1:] {
-		os.Stderr.WriteString("\n\t- ")
-		os.Stderr.WriteString(p)
-	}
-	os.Stderr.WriteString("\n")
-	printLock.Unlock()
+	printW(func(w *bytes.Buffer) {
+		w.WriteString("deduplicating: ")
+		w.WriteString(paths[0])
+		for _, p := range paths[1:] {
+			w.WriteString("\n\t- ")
+			w.WriteString(p)
+		}
+		w.WriteByte('\n')
+	})
 
 	filesAreReady.Wait()
 
@@ -490,14 +499,14 @@ func main() {
 			lazyHashersBonus = "+" + strconv.Itoa(lazyHashers)
 		}
 
-		printLock.Lock()
-		fmt.Fprintf(os.Stderr, `%v:
+		printW(func(w *bytes.Buffer) {
+			fmt.Fprintf(w, `%v:
 	unique:    %d	%s
 	duplicate: %d	%s
 	queue length: %d
 	currently working workers: %d%s/%d
 `, time.Now().Format(time.DateTime), uniqueFiles, humanize.IBytes(uniqueBytes), dupFiles, humanize.IBytes(dupBytes), queueLength, workingWorkers, lazyHashersBonus, concurrency)
-		printLock.Unlock()
+		})
 	}
 	timer.Stop()
 
