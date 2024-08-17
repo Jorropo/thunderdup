@@ -34,8 +34,8 @@ import (
 	"time"
 
 	"github.com/Jorropo/jsync"
-	"github.com/cespare/xxhash/v2"
 	"github.com/dustin/go-humanize"
+	"github.com/zeebo/xxh3"
 	"golang.org/x/sys/unix"
 )
 
@@ -270,7 +270,7 @@ func doLazyHash(other string, length uint64) {
 }
 
 func hashFile(f *os.File, length uint64, p string, statsWereAlreadyRecorded bool) error {
-	h := xxhash.New()
+	h := xxh3.New()
 	_, err := f.WriteTo(h)
 	if err != nil {
 		return fmt.Errorf("WriteTo: %w", err)
